@@ -95,8 +95,24 @@ class MotionModel(Node):
         return self.particles
 
     def dead_reckoning(self):
-        # TODO: to build a dead reckoning model
-        pass 
+        # we are calculating dead reckoning estimate based on the previous pose and odometry delta
+        odom_dx = self.previous_pose.x()
+        odom_dy = self.previous_pose.y()
+        odom_dtheta = self.previous_pose.theta()
+
+        # Assumption we are making here: the robot moves in the direction of the current orientation
+        new_x = self.previous_pose.x() + odom_dx * np.cos(self.previous_pose.theta()) - odom_dy * np.sin(self.previous_pose.theta())
+        new_y = self.previous_pose.y() + odom_dx * np.sin(self.previous_pose.theta()) + odom_dy * np.cos(self.previous_pose.theta())
+        new_theta = self.previous_pose.theta() + odom_dtheta
+
+        # Normalize the angle to be within [-pi, pi]
+        new_theta = (new_theta + np.pi) % (2 * np.pi) - np.pi
+    
+        # Update the previous pose with the new estimated pose
+        self.previous_pose = Pose2(new_x, new_y, new_theta)
+    
+        # Log the dead reckoning pose
+        self.get_logger().info(f"Dead Reckoning Pose: [{new_x}, {new_y}, {new_theta}]")
 
 def main():
     rclpy.init()
