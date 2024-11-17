@@ -22,10 +22,10 @@ class MotionModel(Node):
         self.graph = NonlinearFactorGraph()  
         self.initial_estimate = Values()     
         self.previous_pose = Pose2(0.0, 0.0, 0.0)  
-        self.odom_covariance = gtsam.noiseModel_Diagonal.Sigmas(np.array([0.1, 0.1, 0.1])) 
+        self.odom_covariance = gtsam.noiseModel.Diagonal.Sigmas(np.array([0.1, 0.1, 0.1])) 
 
         # Adding prior factor for the initial pose
-        prior_noise = gtsam.noiseModel_Diagonal.Sigmas(np.array([0.3, 0.3, 0.1]))  
+        prior_noise = gtsam.noiseModel.Diagonal.Sigmas(np.array([0.3, 0.3, 0.1]))  
         self.graph.add(PriorFactorPose2(X(0), self.previous_pose, prior_noise))
         self.initial_estimate.insert(X(0), self.previous_pose)
 
@@ -89,7 +89,7 @@ class MotionModel(Node):
 
         # Log the optimized pose and updated particles
         self.get_logger().info(f"Optimized Pose: {optimized_pose}")
-        self.get_logger().info(f"Updated particles: {self.particles}")
+        # self.get_logger().info(f"Updated particles: {self.particles}")
 
     def get_proposal_dist(self):
         return self.particles

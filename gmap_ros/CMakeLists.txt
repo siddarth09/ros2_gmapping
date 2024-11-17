@@ -17,8 +17,9 @@ find_package(nav_msgs REQUIRED)
 # find_package(<dependency> REQUIRED)
 
 install(PROGRAMS 
-        src/grid_example.py
-        src/slam.py
+        src/measurement_model.py
+        src/motion_model.py
+        src/particle_filter.py
         DESTINATION lib/${PROJECT_NAME})
 
 

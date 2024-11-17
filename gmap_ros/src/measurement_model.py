@@ -8,14 +8,14 @@ import numpy as np
 import random
 from scipy.spatial import KDTree
 import gtsam
-from gtsam import Pose2, Values, NonlinearFactorGraph, BetweenFactor, noiseModel
+from gtsam import Pose2, Values, NonlinearFactorGraph, BetweenFactorPose2, noiseModel
 
 class MeasurementModel(Node):
     def __init__(self):
         super().__init__('measurement_model')
         
         # Declare parameters
-        self.declare_parameter('particles_count', 50)
+        self.declare_parameter('particles_count', 1000)
         self.particles_count = self.get_parameter('particles_count').value
 
 
@@ -34,6 +34,7 @@ class MeasurementModel(Node):
 
         # Publisher for visualizing particles in RViz
         self.particles_pub = self.create_publisher(PoseArray, '/particles', 10)
+        self.timer=self.create_timer(0.1,self.publish_particles)
 
         # Storage for odometry and scan data
         self.last_odom = None
@@ -124,9 +125,17 @@ class MeasurementModel(Node):
         return transformation
 
     def compute_likelihood(self, scan1, scan2):
-        # returns how likely a give particle is, given observed data
-        diff = np.linalg.norm(scan1 - scan2, axis=1)
-        return np.exp(-np.sum(diff) / len(scan1))
+        # Find the minimum length of both scans
+        min_length = min(len(scan1), len(scan2))
+        
+        # Trim both scans to the same size
+        trimmed_scan1 = scan1[:min_length]
+        trimmed_scan2 = scan2[:min_length]
+        
+        # Compute the difference between two sets of points and return a likelihood
+        diff = np.linalg.norm(trimmed_scan1 - trimmed_scan2, axis=1)
+        return np.exp(-np.sum(diff) / len(trimmed_scan1))
+
 
     def transform_points(self, points, transformation):
         
@@ -140,7 +149,7 @@ class MeasurementModel(Node):
     def publish_particles(self):
         # Publish particles for RViz visualization
         particles_msg = PoseArray()
-        particles_msg.header.frame_id = 'map'
+        particles_msg.header.frame_id = 'odom'
         particles_msg.header.stamp = self.get_clock().now().to_msg()
 
         for particle in self.particles:
@@ -168,7 +177,7 @@ class MeasurementModel(Node):
         current_pose = Pose2(best_particle[0], best_particle[1], best_particle[2])
 
         # Add a factor to the graph to connect the previous pose to the current pose
-        self.graph.add(BetweenFactor.Pose2(self.current_pose_index, self.current_pose_index + 1, current_pose.between(self.previous_pose), self.pose_noise))
+        self.graph.add(BetweenFactorPose2(self.current_pose_index, self.current_pose_index + 1, current_pose.between(self.previous_pose), self.pose_noise))
 
         # Add the current pose to the initial estimates
         self.initial_estimate.insert(self.current_pose_index + 1, current_pose)
