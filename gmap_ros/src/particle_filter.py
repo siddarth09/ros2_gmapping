@@ -4,7 +4,7 @@ import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Odometry, OccupancyGrid
 from sensor_msgs.msg import LaserScan
-from geometry_msgs.msg import PoseArray, Pose, Quaternion,TransformStamped
+from geometry_msgs.msg import PoseArray, Pose, Quaternion, TransformStamped, PoseStamped
 import numpy as np
 import random
 from motion_model import MotionModel
@@ -22,25 +22,31 @@ class ParticleFilterMappingNode(Node):
         # Parameters for Occupancy Grid Mapping
         self.declare_parameter('grid_resolution', 0.05)  # Cell size in meters
         self.declare_parameter('grid_size', 100)  # Number of cells in each dimension
+        self.learning_rate = 0.01  # Learning rate for gradient descent
 
         # Initialize particles: each particle is [x, y, theta] with weight
         self.particles = [[0.0, 0.0, 0.0] for _ in range(self.num_particles)]
         self.weights = [1.0 / self.num_particles] * self.num_particles
+
+        # Log-odds parameters to be optimized
+        self.hit_log_odds = 0.7
+        self.miss_log_odds = -0.1
 
         # Create instances of MotionModel and MeasurementModel
         self.motion_model = MotionModel()
         self.measurement_model = MeasurementModel()
 
         # Subscribe to Odometry and LaserScan topics
-        self.odom_sub = self.create_subscription(Odometry, '/odom', self.predict, 10)
+        self.odom_sub = self.create_subscription(PoseStamped, '/motion_model', self.predict, 10)
         self.scan_sub = self.create_subscription(LaserScan, '/scan', self.observation_update, 10)
 
         # Publisher for visualizing particles and occupancy grid map in RViz
         self.particles_pub = self.create_publisher(PoseArray, '/particles', 10)
         self.occupancy_grid_pub = self.create_publisher(OccupancyGrid, '/map', 10)
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
-        self.tf_timer= self.create_timer(0.1, self.publish_map_to_odom_tf)
-        self.grid_timer=self.create_timer(0.1,self.publish_occupancy_grid)
+        self.tf_timer = self.create_timer(0.1, self.publish_map_to_odom_tf)
+        self.grid_timer = self.create_timer(0.1, self.publish_occupancy_grid)
+
         # Occupancy Grid Map initialization
         self.grid_resolution = self.get_parameter('grid_resolution').value
         self.grid_size = self.get_parameter('grid_size').value
@@ -52,35 +58,30 @@ class ParticleFilterMappingNode(Node):
 
     def predict(self, msg):
         # Predict Step: Update each particle's pose based on the odometry data using the motion model
-        self.motion_model.odom_callback(msg)
-        updated_particles = self.motion_model.get_proposal_dist()
-
-        # Update particles with the new proposal distribution
         for i in range(self.num_particles):
-            self.particles[i][0] = updated_particles[i][0]
-            self.particles[i][1] = updated_particles[i][1]
-            self.particles[i][2] = updated_particles[i][2]
+            self.particles[i][0] = msg.pose.position.x
+            self.particles[i][1] = msg.pose.position.y
+            self.particles[i][2] = msg.pose.orientation.z  # Assuming you want to use yaw
 
     def observation_update(self, msg):
         # Update Step: Adjust the weights of each particle using the measurement model
         self.measurement_model.last_odom = self.motion_model.previous_pose
         self.measurement_model.scan_callback(msg)
-        
-        #From measurement model after ICP
+
+        # From measurement model after ICP
         updated_particles = self.measurement_model.particles 
         updated_weights = self.measurement_model.weights  
 
-        
         self.particles = updated_particles
         self.weights = updated_weights
 
-        self.normalize_weights()
-        
         if self.effective_particle_count() < self.num_particles / 2:
             self.resample_particles()
 
-        # Update the occupancy grid map using the particles and scan data
         self.update_occupancy_grid(self.measurement_model.last_scan_points)
+
+        # Update log-odds parameters using gradient descent
+        self.optimize_log_odds()
 
         # Publish the particle poses for visualization
         self.publish_particles()
@@ -89,13 +90,11 @@ class ParticleFilterMappingNode(Node):
         self.publish_occupancy_grid()
 
     def normalize_weights(self):
-       
         total_weight = sum(self.weights)
         if total_weight > 0:
             self.weights = [w / total_weight for w in self.weights]
 
     def effective_particle_count(self):
-        
         weights = np.array(self.weights)
         return 1.0 / np.sum(weights ** 2)
 
@@ -119,7 +118,6 @@ class ParticleFilterMappingNode(Node):
         self.weights = [1.0 / self.num_particles] * self.num_particles
 
     def update_occupancy_grid(self, scan_points):
-        
         if scan_points is None:
             return
 
@@ -139,11 +137,32 @@ class ParticleFilterMappingNode(Node):
             # Update log odds for free cells
             for cell_x, cell_y in cells_on_ray:
                 if 0 <= cell_x < self.grid_size and 0 <= cell_y < self.grid_size:
-                    self.log_odds_grid[cell_x, cell_y] -= 0.1  # Miss log-odds (free space)
+                    self.log_odds_grid[cell_x, cell_y] += self.miss_log_odds  # Miss log-odds (free space)
 
             # Update log odds for the occupied cell (end of laser scan)
             if 0 <= grid_x < self.grid_size and 0 <= grid_y < self.grid_size:
-                self.log_odds_grid[grid_x, grid_y] += 0.7  # Hit log-odds (occupied space)
+                self.log_odds_grid[grid_x, grid_y] += self.hit_log_odds  # Hit log-odds (occupied space)
+
+    def optimize_log_odds(self):
+        # Calculate gradient for log-odds optimization
+        hit_gradient = 0.0
+        miss_gradient = 0.0
+
+        for cell_x in range(self.grid_size):
+            for cell_y in range(self.grid_size):
+                log_odds = self.log_odds_grid[cell_x, cell_y]
+                occupancy_prob = 1 - 1 / (1 + np.exp(log_odds))
+                target_prob = 0.9 if log_odds > 0 else 0.1  # Target occupancy based on hit or miss
+
+                error = occupancy_prob - target_prob
+                if log_odds > 0:
+                    hit_gradient += error
+                else:
+                    miss_gradient += error
+
+        # Update log-odds parameters using gradient descent
+        self.hit_log_odds -= self.learning_rate * hit_gradient
+        self.miss_log_odds -= self.learning_rate * miss_gradient
 
     def world_to_grid(self, x, y):
         # Convert world coordinates to grid indices
@@ -191,16 +210,13 @@ class ParticleFilterMappingNode(Node):
         self.particles_pub.publish(particles_msg)
 
     def publish_occupancy_grid(self):
-        # Converting the log-odds values to probabilities and publish the occupancy grid map
-        
-        
         # Updating the clip function from octomap 
         np.clip(self.log_odds_grid, -10, 10, out=self.log_odds_grid)
         occupancy_data = (1 - 1 / (1 + np.exp(self.log_odds_grid))) * 100  
 
         occupancy_grid_msg = OccupancyGrid()
         occupancy_grid_msg.header.stamp = self.get_clock().now().to_msg()
-        occupancy_grid_msg.header.frame_id = 'map'
+        occupancy_grid_msg.header.frame_id = 'odom'
         occupancy_grid_msg.info.resolution = self.grid_resolution
         occupancy_grid_msg.info.width = self.grid_size
         occupancy_grid_msg.info.height = self.grid_size
@@ -209,24 +225,7 @@ class ParticleFilterMappingNode(Node):
         occupancy_grid_msg.data = occupancy_data.flatten().astype(int).tolist()
 
         self.occupancy_grid_pub.publish(occupancy_grid_msg)
-        
-    # def publish_map_to_odom_tf(self):
-    #     # Publish the transform between the map and odom frames using the robot's most probable pose
-    #     best_p_index = np.argmax(self.weights)
-    #     best_p = self.particles[best_p_index]
 
-    #     t = TransformStamped()
-    #     t.header.stamp = self.get_clock().now().to_msg()
-    #     t.header.frame_id = 'map'
-    #     t.child_frame_id = 'odom'
-    #     t.transform.translation.x = best_p[0]
-    #     t.transform.translation.y = best_p[1]
-    #     t.transform.translation.z = 0.0
-    #     q = self.create_quaternion_from_yaw(best_p[2])
-    #     t.transform.rotation = q
-
-    #     self.tf_broadcaster.sendTransform(t)
-        
     def publish_map_to_odom_tf(self):
         # Publish the transform between the map and odom frames using the robot's most probable pose
         best_p_index = np.argmax(self.weights)
@@ -236,8 +235,8 @@ class ParticleFilterMappingNode(Node):
         t.header.stamp = self.get_clock().now().to_msg()
         t.header.frame_id = 'map'
         t.child_frame_id = 'odom'
-        t.transform.translation.x = 0.0
-        t.transform.translation.y = 0.0
+        t.transform.translation.x = best_p[0]
+        t.transform.translation.y = best_p[1]
         t.transform.translation.z = 0.0
         q = self.create_quaternion_from_yaw(best_p[2])
         t.transform.rotation = q
