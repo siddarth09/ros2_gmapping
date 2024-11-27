@@ -1,14 +1,14 @@
+#!/usr/bin/env python3
 import numpy as np
 from sklearn.neighbors import KDTree
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
-from geometry_msgs.msg import PoseArray, Pose, Quaternion
+from geometry_msgs.msg import PoseArray, Pose, Quaternion, TransformStamped, PoseStamped
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import PoseStamped
 from gtsam import Pose2, Values, NonlinearFactorGraph, BetweenFactorPose2, noiseModel
 import gtsam
-import random
+import tf2_ros
 
 class MeasurementModel(Node):
     def __init__(self):
@@ -18,7 +18,7 @@ class MeasurementModel(Node):
         self.declare_parameter('particles_count', 1000)
         self.particles_count = self.get_parameter('particles_count').value
 
-        self.particles = [[0.0, 0.0, 0.0] for _ in range(self.particles_count)]
+        self.particles = [[0.5, 0.5, 0.0] for _ in range(self.particles_count)]
         self.weights = [1.0 / self.particles_count] * self.particles_count
 
         # GTSAM variables for graph optimization
@@ -29,25 +29,32 @@ class MeasurementModel(Node):
 
         # Subscribers to the laser scan and odometry topics
         self.sub_scan = self.create_subscription(LaserScan, '/scan', self.scan_callback, 10)
-        self.sub_odom = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
+        self.sub_odom = self.create_subscription(PoseStamped, '/motion_model', self.odom_callback, 10)
 
         # Publisher for visualizing particles in RViz
         self.particles_pub = self.create_publisher(PoseArray, '/particles', 10)
         self.optimized_pose_pub = self.create_publisher(PoseStamped, '/measurementmodel', 10)
+        self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
         self.timer = self.create_timer(0.1, self.publish_particles)
 
         # Storage for odometry and scan data
         self.last_odom = None
         self.last_scan_points = None
-        self.previous_pose = Pose2(0.0, 0.0, 0.0)
+        self.previous_pose = Pose2(0.5, 0.5, 0.0)
         self.current_pose_index = 0
+
+        self.get_logger().info("MeasurementModel initialized with {} particles.".format(self.particles_count))
 
     def odom_callback(self, msg):
         self.last_odom = msg
+        self.get_logger().info("Odometry data received: position ({}, {})".format(msg.pose.position.x, msg.pose.position.y))
 
     def scan_callback(self, msg):
         if not self.last_odom:
+            self.get_logger().warn("No odometry data available, skipping scan callback.")
             return
+
+        self.get_logger().info("Laser scan data received with {} ranges.".format(len(msg.ranges)))
 
         angle_min = msg.angle_min
         angle_increment = msg.angle_increment
@@ -69,7 +76,24 @@ class MeasurementModel(Node):
 
         # Apply ICP iteratively until convergence
         if self.last_scan_points is not None:
+            self.get_logger().info("Starting ICP matching...")
             transformation, error, iterations = self.icp_matching(self.last_scan_points, scan_points)
+            self.get_logger().info("ICP completed with final error: {} after {} iterations.".format(error, iterations))
+
+            # Broadcast the transformation
+            t = TransformStamped()
+            t.header.stamp = self.get_clock().now().to_msg()
+            t.header.frame_id = 'map'
+            t.child_frame_id = 'odom'
+            t.transform.translation.x = transformation[0, 2]
+            t.transform.translation.y = transformation[1, 2]
+            t.transform.translation.z = 0.0
+
+            q = self.create_quaternion_from_yaw(np.arctan2(transformation[1, 0], transformation[0, 0]))
+            t.transform.rotation = q
+
+            # Publish the transform
+            self.tf_broadcaster.sendTransform(t)
 
             # Update particle positions based on the transformation
             for i in range(self.particles_count):
@@ -90,9 +114,11 @@ class MeasurementModel(Node):
         self.publish_particles()
         self.last_scan_points = scan_points
 
-    def icp_matching(self, prev_points, curr_points, max_iter=100, epsilon=1e-3):
+    def icp_matching(self, prev_points, curr_points, max_iter=500, epsilon=1e-3):
         E = np.inf
         for i in range(max_iter):
+            self.get_logger().info("ICP iteration {}: previous error: {}".format(i, E))
+
             # Step 1: Find correspondences
             kdtree = KDTree(curr_points)
             distances, indices = kdtree.query(prev_points)
@@ -106,12 +132,10 @@ class MeasurementModel(Node):
             prev_centered = prev_points - prev_centroid
             curr_centered = curr_correspondences - curr_centroid
 
-            # Step 4: Compute cross-covariance and SVD
             H = np.dot(curr_centered.T, prev_centered)
             U, _, Vt = np.linalg.svd(H)
             R = np.dot(U, Vt)
 
-            # Step 5: Correct rotation if reflected
             if np.linalg.det(R) < 0:
                 U[:, -1] *= -1
                 R = np.dot(U, Vt)
@@ -130,9 +154,10 @@ class MeasurementModel(Node):
             # Step 9: Compute error
             EOld = E
             E = self.compute_error(prev_points, curr_points)
-
+            self.get_logger().info(f"Current error after ICP iteration {i}: {E}")
             # Step 10: Check for convergence
             if abs(EOld - E) < epsilon:
+                self.get_logger().info("ICP converged after {} iterations with error: {}".format(i, E))
                 break
 
         return transformation, E, i
@@ -158,6 +183,7 @@ class MeasurementModel(Node):
         return np.array(transformed_points)
 
     def publish_particles(self):
+        self.get_logger().info("Publishing particles for RViz visualization.")
         # Publish particles for RViz visualization
         particles_msg = PoseArray()
         particles_msg.header.frame_id = 'odom'
@@ -195,8 +221,8 @@ class MeasurementModel(Node):
         # Compute the mean squared error between two sets of points
         return np.mean(np.linalg.norm(trimmed_scan1 - trimmed_scan2, axis=1))
 
-
     def update_pose_graph(self):
+        self.get_logger().info("Updating pose graph with current particle information.")
         # Convert the current particle with highest weight to a GTSAM pose
         best_particle_idx = np.argmax(self.weights)
         best_particle = self.particles[best_particle_idx]
@@ -212,7 +238,7 @@ class MeasurementModel(Node):
         self.previous_pose = current_pose
         self.current_pose_index += 1
 
-        print(self.graph)
+        self.get_logger().info("Optimizing pose graph...")
         # Optimize the pose graph
         optimizer = gtsam.LevenbergMarquardtOptimizer(self.graph, self.initial_estimate)
         self.optimized_values = optimizer.optimize()
@@ -234,6 +260,7 @@ class MeasurementModel(Node):
         pose_stamped_msg.pose.orientation = self.create_quaternion_from_yaw(optimized_pose.theta())
         self.optimized_pose_pub.publish(pose_stamped_msg)
 
+        self.get_logger().info("Pose graph update completed and pose published.")
         return self.particles
 
 def main(args=None):

@@ -10,6 +10,7 @@ import random
 from motion_model import MotionModel
 from measurement_model import MeasurementModel
 import tf2_ros
+from tf_transformations import quaternion_from_euler, euler_from_quaternion
 
 class ParticleFilterMappingNode(Node):
     def __init__(self):
@@ -22,15 +23,14 @@ class ParticleFilterMappingNode(Node):
         # Parameters for Occupancy Grid Mapping
         self.declare_parameter('grid_resolution', 0.05)  # Cell size in meters
         self.declare_parameter('grid_size', 100)  # Number of cells in each dimension
-        self.learning_rate = 0.01  # Learning rate for gradient descent
 
         # Initialize particles: each particle is [x, y, theta] with weight
         self.particles = [[0.0, 0.0, 0.0] for _ in range(self.num_particles)]
         self.weights = [1.0 / self.num_particles] * self.num_particles
 
-        # Log-odds parameters to be optimized
+        # Log-odds parameters
         self.hit_log_odds = 0.7
-        self.miss_log_odds = -0.1
+        self.miss_log_odds = -0.4
 
         # Create instances of MotionModel and MeasurementModel
         self.motion_model = MotionModel()
@@ -69,8 +69,8 @@ class ParticleFilterMappingNode(Node):
         self.measurement_model.scan_callback(msg)
 
         # From measurement model after ICP
-        updated_particles = self.measurement_model.particles 
-        updated_weights = self.measurement_model.weights  
+        updated_particles = self.measurement_model.particles
+        updated_weights = self.measurement_model.weights
 
         self.particles = updated_particles
         self.weights = updated_weights
@@ -79,10 +79,7 @@ class ParticleFilterMappingNode(Node):
             self.resample_particles()
 
         self.update_occupancy_grid(self.measurement_model.last_scan_points)
-
-        # Update log-odds parameters using gradient descent
-        self.optimize_log_odds()
-
+        self.normalize_weights()
         # Publish the particle poses for visualization
         self.publish_particles()
 
@@ -102,7 +99,7 @@ class ParticleFilterMappingNode(Node):
         # Resample particles based on the weights
         new_particles = []
         cumulative_sum = np.cumsum(self.weights)
-        cumulative_sum[-1] = 1.0  
+        cumulative_sum[-1] = 1.0
         step = 1.0 / self.num_particles
         r = random.uniform(0, step)
         index = 0
@@ -110,7 +107,7 @@ class ParticleFilterMappingNode(Node):
         for _ in range(self.num_particles):
             while r > cumulative_sum[index]:
                 index += 1
-            new_particles.append(self.particles[index][:]) 
+            new_particles.append(self.particles[index][:])
             r += step
 
         # Replace particles with the resampled ones and reset weights
@@ -142,27 +139,6 @@ class ParticleFilterMappingNode(Node):
             # Update log odds for the occupied cell (end of laser scan)
             if 0 <= grid_x < self.grid_size and 0 <= grid_y < self.grid_size:
                 self.log_odds_grid[grid_x, grid_y] += self.hit_log_odds  # Hit log-odds (occupied space)
-
-    def optimize_log_odds(self):
-        # Calculate gradient for log-odds optimization
-        hit_gradient = 0.0
-        miss_gradient = 0.0
-
-        for cell_x in range(self.grid_size):
-            for cell_y in range(self.grid_size):
-                log_odds = self.log_odds_grid[cell_x, cell_y]
-                occupancy_prob = 1 - 1 / (1 + np.exp(log_odds))
-                target_prob = 0.9 if log_odds > 0 else 0.1  # Target occupancy based on hit or miss
-
-                error = occupancy_prob - target_prob
-                if log_odds > 0:
-                    hit_gradient += error
-                else:
-                    miss_gradient += error
-
-        # Update log-odds parameters using gradient descent
-        self.hit_log_odds -= self.learning_rate * hit_gradient
-        self.miss_log_odds -= self.learning_rate * miss_gradient
 
     def world_to_grid(self, x, y):
         # Convert world coordinates to grid indices
@@ -210,9 +186,9 @@ class ParticleFilterMappingNode(Node):
         self.particles_pub.publish(particles_msg)
 
     def publish_occupancy_grid(self):
-        # Updating the clip function from octomap 
+        # Clip log-odds to prevent overflow
         np.clip(self.log_odds_grid, -10, 10, out=self.log_odds_grid)
-        occupancy_data = (1 - 1 / (1 + np.exp(self.log_odds_grid))) * 100  
+        occupancy_data = (1 - 1 / (1 + np.exp(self.log_odds_grid))) * 100
 
         occupancy_grid_msg = OccupancyGrid()
         occupancy_grid_msg.header.stamp = self.get_clock().now().to_msg()
@@ -238,8 +214,12 @@ class ParticleFilterMappingNode(Node):
         t.transform.translation.x = best_p[0]
         t.transform.translation.y = best_p[1]
         t.transform.translation.z = 0.0
-        q = self.create_quaternion_from_yaw(best_p[2])
-        t.transform.rotation = q
+        q=quaternion_from_euler(0,0,best_p[2]) 
+        
+        t.transform.rotation.x=q[0]
+        t.transform.rotation.y=q[1]
+        t.transform.rotation.z=q[2]
+        t.transform.rotation.w=q[3]
 
         self.tf_broadcaster.sendTransform(t)
 
@@ -250,12 +230,14 @@ class ParticleFilterMappingNode(Node):
         q.w = np.cos(yaw / 2.0)
         return q
 
+
 def main(args=None):
     rclpy.init(args=args)
     particle_filter_node = ParticleFilterMappingNode()
     rclpy.spin(particle_filter_node)
     particle_filter_node.destroy_node()
     rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()

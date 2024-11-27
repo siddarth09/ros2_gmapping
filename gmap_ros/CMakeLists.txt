@@ -20,6 +20,7 @@ install(PROGRAMS
         src/measurement_model.py
         src/motion_model.py
         src/particle_filter.py
+        src/rbpf.py
         DESTINATION lib/${PROJECT_NAME})
 
         

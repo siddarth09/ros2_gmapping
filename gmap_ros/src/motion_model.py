@@ -3,11 +3,13 @@
 import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, TransformStamped
 import numpy as np
 import gtsam
 from gtsam import Pose2, PriorFactorPose2, BetweenFactorPose2, Values, NonlinearFactorGraph
 from gtsam.symbol_shorthand import X
+from tf_transformations import quaternion_from_euler,euler_from_quaternion
+import tf2_ros
 
 class MotionModel(Node):
     def __init__(self):
@@ -17,7 +19,7 @@ class MotionModel(Node):
         self.num_particles = self.get_parameter("particles").value 
         self.particles = [[0.0, 0.0, 0.0] for _ in range(self.num_particles)]
         self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
-
+        self.tf_broadcaster=tf2_ros.TransformBroadcaster(self)
         # Publisher for the optimized pose
         self.motion_model_pub = self.create_publisher(PoseStamped, '/motion_model', 10)
 
@@ -33,16 +35,40 @@ class MotionModel(Node):
         self.initial_estimate.insert(X(0), self.previous_pose)
 
         self.odom_count = 0
-
-    def odom_callback(self, msg):
+        self.prev_time=None 
+    
+    def odom_callback(self,msg):
         twist_covariance = np.array(msg.twist.covariance).reshape((6, 6))
         
+        q = (
+        msg.pose.pose.orientation.x,
+        msg.pose.pose.orientation.y,
+        msg.pose.pose.orientation.z,
+        msg.pose.pose.orientation.w)
+        
+        # self.get_logger().warn(f"euler values:{q}")
+        quaterion=euler_from_quaternion(q)
+        self.get_logger().warn(f"euler values:{quaterion}")
+        current_time = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        self.previous_pose=Pose2(msg.pose.pose.position.x,
+                                 msg.pose.pose.position.y,
+                                 quaterion[2]         
+        )
         linear_x_variance = twist_covariance[0, 0]
         linear_y_variance = twist_covariance[1, 1]
         angular_z_variance = twist_covariance[5, 5]
-
-        # Define DT and create F and B matrices (similar to the PF code)
-        DT = 0.1  # Assuming a constant time interval
+        
+        if self.prev_time is None: 
+            DT=0.1 
+        else: 
+            DT= current_time-self.prev_time
+        self.prev_time=current_time
+        
+        
+        if DT<=0.0: 
+            self.get_logger().warn("Non positive DT is detected")
+            
+            
         F = np.array([[1.0, 0, 0],
                       [0, 1.0, 0],
                       [0, 0, 1.0]])
@@ -115,27 +141,35 @@ class MotionModel(Node):
         self.odom_count += 1
 
         # Log the optimized pose
-        self.get_logger().info(f"Optimized Pose: {optimized_pose}")
+        self.get_logger().info(f"Optimized Pose: {optimized_pose}")        
 
     def publish_optimized_pose(self, optimized_pose):
+
         pose_msg = PoseStamped()
         pose_msg.header.stamp = self.get_clock().now().to_msg()
-        pose_msg.header.frame_id = "map"  # Replace with appropriate frame ID
-
-        # Set position and orientation
+        pose_msg.header.frame_id = "map"  
         pose_msg.pose.position.x = optimized_pose[0]
         pose_msg.pose.position.y = optimized_pose[1]
         pose_msg.pose.position.z = 0.0
 
-        # Convert theta to quaternion for orientation
-        qz = np.sin(optimized_pose[2] / 2.0)
-        qw = np.cos(optimized_pose[2] / 2.0)
+        q = quaternion_from_euler(0.0, 0.0, optimized_pose[2])
+        pose_msg.pose.orientation.z = q[2]
+        pose_msg.pose.orientation.w = q[3]
 
-        pose_msg.pose.orientation.z = qz
-        pose_msg.pose.orientation.w = qw
-
-        # Publish the pose
         self.motion_model_pub.publish(pose_msg)
+
+       
+        t = TransformStamped()
+        t.header.stamp = self.get_clock().now().to_msg()
+        t.header.frame_id = 'odom'
+        t.child_frame_id = 'base_footprint'
+        t.transform.translation.x = optimized_pose[0]
+        t.transform.translation.y = optimized_pose[1]
+        t.transform.translation.z = 0.0
+        t.transform.rotation = pose_msg.pose.orientation
+
+        self.tf_broadcaster.sendTransform(t)
+
 
 def main():
     rclpy.init()

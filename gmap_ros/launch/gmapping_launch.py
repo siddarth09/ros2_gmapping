@@ -17,7 +17,7 @@ def generate_launch_description():
     
     # Get RViz config file directory (change this path to point to your specific RViz config if needed)
     rviz_config_dir = os.path.join(get_package_share_directory('turtlebot3_navigation2'), 'rviz', 'nav2_default_view.rviz')
-
+    
     # Node to launch the particle filter script
     particle_filter_node = Node(
         package='gmap_ros',
@@ -33,7 +33,7 @@ def generate_launch_description():
     turtlebot3_gazebo_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(turtlebot3_launch_file),
         launch_arguments={
-            'use_sim_time': 'true'  # Ensure use_sim_time is set to true for synchronization with simulation
+            'use_sim_time': 'true'  
         }.items(),
     )
 
