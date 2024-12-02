@@ -1,4 +1,4 @@
-# ros2_gmapping
+# ROS2 GMAPPING
 
 **Gmapping ROS 2 Implementation**
 
