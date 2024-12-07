@@ -35,6 +35,7 @@ This project includes:
 - **Measurement Model**: Uses laser scan data to adjust weights of particles based on how well the predicted map matches the current scan. Scan matching is performed using the **ICP (Iterative Closest Point)** algorithm.
 - **Occupancy Grid Map**: The occupancy grid map is continuously updated and published to **/map** for visualization in **RViz**. Each cell's probability is represented in log-odds to facilitate efficient updates.
 
+###TODO: 
 ## GTSAM Integration
 
 **GTSAM (Georgia Tech Smoothing and Mapping)** is a powerful library for factor graph-based optimization. It has been integrated into both the **motion model** and **measurement model** to improve accuracy and consistency.
