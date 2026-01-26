@@ -137,9 +137,10 @@ void rle(OutputIterator& out, const Iterator & begin, const Iterator & end){
 			count=1;
 		}
 	}
-	if (count>0)
+	if (count>0) {
 		*out=std::make_pair(current,count);
 		out++;
+	}
 }
 
 //BEGIN legacy
