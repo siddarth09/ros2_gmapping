@@ -33,43 +33,49 @@ void SlamGmapping::init() {
     got_first_scan_ = false;
     got_map_ = false;
 
-    throttle_scans_ = 1;
-    base_frame_ = "base_link";
-    map_frame_ = "map";
-    odom_frame_ = "odom";
-    transform_publish_period_ = 0.05;
+    // All settings below are ROS parameters; the defaults preserve the
+    // original hardcoded behaviour when no parameter file is supplied.
+    throttle_scans_ = this->declare_parameter("throttle_scans", 1);
+    base_frame_ = this->declare_parameter("base_frame", std::string("base_link"));
+    map_frame_ = this->declare_parameter("map_frame", std::string("map"));
+    odom_frame_ = this->declare_parameter("odom_frame", std::string("odom"));
+    transform_publish_period_ = this->declare_parameter("transform_publish_period", 0.05);
 
-    map_update_interval_ = tf2::durationFromSec(0.5);
-    maxUrange_ = 80.0;  maxRange_ = 0.0;
-    minimum_score_ = 0;
-    sigma_ = 0.05;
-    kernelSize_ = 1;
-    lstep_ = 0.05;
-    astep_ = 0.05;
-    iterations_ = 5;
-    lsigma_ = 0.075;
-    ogain_ = 3.0;
-    lskip_ = 0;
-    srr_ = 0.1;
-    srt_ = 0.2;
-    str_ = 0.1;
-    stt_ = 0.2;
-    linearUpdate_ = 1.0;
-    angularUpdate_ = 0.5;
-    temporalUpdate_ = 1.0;
-    resampleThreshold_ = 0.5;
-    particles_ = 30;
-    xmin_ = -10.0;
-    ymin_ = -10.0;
-    xmax_ = 10.0;
-    ymax_ = 10.0;
-    delta_ = 0.05;
-    occ_thresh_ = 0.25;
-    llsamplerange_ = 0.01;
-    llsamplestep_ = 0.01;
-    lasamplerange_ = 0.005;
-    lasamplestep_ = 0.005;
-    tf_delay_ = transform_publish_period_;
+    double map_update_interval = this->declare_parameter("map_update_interval", 0.5);
+    map_update_interval_ = tf2::durationFromSec(map_update_interval);
+    maxUrange_ = this->declare_parameter("maxUrange", 80.0);
+    maxRange_ = this->declare_parameter("maxRange", 0.0);
+    minimum_score_ = this->declare_parameter("minimum_score", 0.0);
+    sigma_ = this->declare_parameter("sigma", 0.05);
+    kernelSize_ = this->declare_parameter("kernelSize", 1);
+    lstep_ = this->declare_parameter("lstep", 0.05);
+    astep_ = this->declare_parameter("astep", 0.05);
+    iterations_ = this->declare_parameter("iterations", 5);
+    lsigma_ = this->declare_parameter("lsigma", 0.075);
+    ogain_ = this->declare_parameter("ogain", 3.0);
+    lskip_ = this->declare_parameter("lskip", 0);
+    srr_ = this->declare_parameter("srr", 0.1);
+    srt_ = this->declare_parameter("srt", 0.2);
+    str_ = this->declare_parameter("str", 0.1);
+    stt_ = this->declare_parameter("stt", 0.2);
+    linearUpdate_ = this->declare_parameter("linearUpdate", 1.0);
+    angularUpdate_ = this->declare_parameter("angularUpdate", 0.5);
+    temporalUpdate_ = this->declare_parameter("temporalUpdate", 1.0);
+    resampleThreshold_ = this->declare_parameter("resampleThreshold", 0.5);
+    particles_ = this->declare_parameter("particles", 30);
+    // initial map bounds (metres) and resolution - enlarge these if the robot
+    // starts or drives outside the default 20 x 20 m window
+    xmin_ = this->declare_parameter("xmin", -10.0);
+    ymin_ = this->declare_parameter("ymin", -10.0);
+    xmax_ = this->declare_parameter("xmax", 10.0);
+    ymax_ = this->declare_parameter("ymax", 10.0);
+    delta_ = this->declare_parameter("delta", 0.05);
+    occ_thresh_ = this->declare_parameter("occ_thresh", 0.25);
+    llsamplerange_ = this->declare_parameter("llsamplerange", 0.01);
+    llsamplestep_ = this->declare_parameter("llsamplestep", 0.01);
+    lasamplerange_ = this->declare_parameter("lasamplerange", 0.005);
+    lasamplestep_ = this->declare_parameter("lasamplestep", 0.005);
+    tf_delay_ = this->declare_parameter("tf_delay", transform_publish_period_);
 }
 
 void SlamGmapping::startLiveSlam() {
