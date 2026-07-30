@@ -80,8 +80,14 @@ void SlamGmapping::init() {
 
 void SlamGmapping::startLiveSlam() {
     entropy_publisher_ = this->create_publisher<std_msgs::msg::Float64>("entropy", rclcpp::SystemDefaultsQoS());
-    sst_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>("map", rclcpp::SystemDefaultsQoS());
-    sstm_ = this->create_publisher<nav_msgs::msg::MapMetaData>("map_metadata", rclcpp::SystemDefaultsQoS());
+    // Latched (transient_local) map QoS so subscribers that request
+    // transient_local durability - e.g. nav2's costmap StaticLayer with
+    // map_subscribe_transient_local: True - actually receive the map. With the
+    // previous volatile QoS the durability was incompatible, so the global
+    // costmap never got the map and stayed at its tiny default size.
+    auto map_qos = rclcpp::QoS(1).transient_local().reliable();
+    sst_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>("map", map_qos);
+    sstm_ = this->create_publisher<nav_msgs::msg::MapMetaData>("map_metadata", map_qos);
     scan_filter_sub_ = std::make_shared<message_filters::Subscriber<sensor_msgs::msg::LaserScan>>
             (node_, "scan", rclcpp::SensorDataQoS().get_rmw_qos_profile());
 //    sub_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
